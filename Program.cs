@@ -1,34 +1,39 @@
-﻿using Canopy.API.Common;
 using Canopy.API.Common.AuthPolicies;
 using Canopy.API.Common.Repositories;
-using Canopy.CMT.ActionPlans.Authorization.Middleware;
-using Canopy.CMT.ActionPlans.Endpoints;
-using Canopy.CMT.ActionPlans.Models;
-using Canopy.CMT.ActionPlans.Repositories;
-using Canopy.CMT.ActionPlans.Services;
-using Canopy.CMT.ActionPlans.Services.Interfaces;
+using Canopy.API.Common;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http.Json;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
-using RabbitMQ.Client;
-using ServiceBus;
+using Canopy.Core.Common.Models;
+using Canopy.Core.Common.Services.Interfaces;
+using Canopy.Core.Common.Services;
+using Canopy.Core.Common.Repositories;
+using Microsoft.AspNetCore.Connections;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using ServiceBus.Interfaces;
+using ServiceBus;
 using ServiceBusRabbitMQ;
+using RabbitMQ.Client;
+using Microsoft.AspNetCore.Http.Json;
+using Canopy.Core.Common.Authorization.Middleware;
+using Canopy.Core.Common.Endpoints;
+using Swashbuckle.AspNetCore.SwaggerUI;
 
-const string corsAllowAll = "_corsAllowAll";
+var corsAllowAll = "_corsAllowAll";
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddDbContext<ActionPlanDbContext>(
-    options => options.UseSqlServer("name=ConnectionStrings:SQLClient"));
+builder.Services.AddDbContext<CommonDbContext>(
+        options => options.UseSqlServer("name=ConnectionStrings:SQLClient"));
+
+builder.Services.AddDbContext<CanopyCoreDbContext>(
+        options => options.UseSqlServer("name=ConnectionStrings:SQL"));
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(option =>
 {
-    option.SwaggerDoc("Canopy.CMT.ActionPlans", new OpenApiInfo { Title = "Canopy.CMT.ActionPlans", Version = "v1" });
-    option.CustomSchemaIds(schema => schema.FullName?.Replace("+", "."));
+    option.SwaggerDoc("Canopy.Core.CommonService", new OpenApiInfo { Title = "Canopy.Core.CommonService", Version = "v1" });
+    option.CustomSchemaIds(schema => schema.FullName);
     option.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         In = ParameterLocation.Header,
@@ -57,10 +62,10 @@ builder.Services.AddSwaggerGen(option =>
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(name: corsAllowAll,
-        policy =>
-        {
-            policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader();
-        });
+                      policy =>
+                      {
+                          policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader();
+                      });
 });
 
 builder.Services.AddSingleton<IJWTUtils, JWTUtils>();
@@ -68,19 +73,20 @@ builder.Services.AddTransient<IAuthorizationHandler, SystemAdminPolicyHandler>()
 builder.Services.AddTransient<IAuthorizationHandler, AdminPolicyHandler>();
 builder.Services.AddTransient<IAuthorizationHandler, CanopyEditorPolicyHandler>();
 builder.Services.AddTransient<IAuthorizationHandler, CanopyViewerPolicyHandler>();
+builder.Services.AddScoped(typeof(IRepository<>), typeof(CommonServiceDbRepository<>));
+builder.Services.AddScoped(typeof(ICanopyCoreRepository<>), typeof(CanopyCoreDbRepository<>));
+builder.Services.AddScoped<ICommonDropDownService, CommonDropDownService>();
+builder.Services.AddScoped<IDataTableBulkEditService, DataTableBulkEditService>();
+builder.Services.AddScoped<ISystemErrorLogService, SystemErrorLogService>();
+builder.Services.AddScoped<ISystemStatusService, SystemStatusService>();
 builder.Services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
-builder.Services.AddScoped(typeof(IRepository<>), typeof(ActionPlanDbRepository<>));
-builder.Services.AddScoped<IActionPlanDropDownServices, ActionPlanDropDownServices>();
-builder.Services.AddScoped<IActionPlanServices, ActionPlanServices>();
-builder.Services.AddScoped<IActionPlanCommentServices, ActionPlanCommentServices>();
-
 
 builder.Services.AddStackExchangeRedisCache(options =>
 {
     options.Configuration = builder.Configuration.GetValue<string>("ConnectionStrings:Redis");
     options.InstanceName = "CanopyRedis";
 });
-builder.Services.AddSingleton<IRedisCacheRepository, ActionPlanRedisRepository>();
+builder.Services.AddSingleton<IRedisCacheRepository, CommonServiceRedisRepository>();
 
 builder.Services.AddSingleton<IRabbitMQPersistentConnection>(svcProvider =>
 {
@@ -101,7 +107,7 @@ builder.Services.AddSingleton<IRabbitMQPersistentConnection>(svcProvider =>
 
 builder.Services.AddSingleton<IServiceBus, ServiceBusRabbitMQ.ServiceBusRabbitMQ>(svcProvider =>
 {
-    var queueName = "Canopy.CMT.ActionPlans";
+    var queueName = "Canopy.Core.CommonService";
     var rabbitMQConn = svcProvider.GetRequiredService<IRabbitMQPersistentConnection>();
     var logger = svcProvider.GetRequiredService<ILogger<ServiceBusRabbitMQ.ServiceBusRabbitMQ>>();
     var serviceBusSubMgr = svcProvider.GetRequiredService<IServiceBusSubscriptionsManager>();
@@ -162,13 +168,18 @@ if (app.Environment.IsDevelopment())
 
     app.UseSwaggerUI(c =>
     {
-        c.SwaggerEndpoint("/swagger-docs/Canopy.CMT.ActionPlans/swagger.json", "Canopy.CMT.ActionPlans API Docs");
+        c.SwaggerEndpoint("/swagger-docs/Canopy.Core.CommonService/swagger.json", "Canopy.Core.CommonService API Docs");
+        c.DisplayRequestDuration();
+        c.DocExpansion(DocExpansion.None);
     });
 }
 
 app.UseMiddleware<ServiceIdentityVerification>();
 app.UseAuthorization();
-app.MapActionPlansDropDownEndPoints();
-app.MapActionPlansEndPoints();
-app.MapActionPlanCommentEndPoints();
+
+app.MapCommonDropDownEnpoints();
+app.MapDataTableBulkEditEndpoints();
+app.MapSystemErrorLogEndpoints();
+app.MapSystemStatusEndpoints();
+
 app.Run();
